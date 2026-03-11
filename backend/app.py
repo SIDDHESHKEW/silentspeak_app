@@ -1,17 +1,6 @@
 # ============================================================
 # app.py — SilentSpeak FastAPI Backend
 # ============================================================
-#
-# Responsibilities:
-#   - Load model + resources once at server startup
-#   - GET  /videos          → list available demo videos
-#   - POST /predict         → run inference on a selected demo video
-#   - POST /predict/upload  → run inference on an uploaded/webcam video
-#   - GET  /health          → confirm server + model are ready
-#
-# Run with:
-#   uvicorn app:app --reload
-# ============================================================
 
 import os
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
@@ -24,12 +13,13 @@ import subprocess
 from contextlib import asynccontextmanager
 from typing import List, Optional
 
-from fastapi            import FastAPI, HTTPException, UploadFile, File
-from fastapi.middleware.cors    import CORSMiddleware
-from fastapi.staticfiles        import StaticFiles
-from fastapi.responses          import FileResponse
-from pydantic           import BaseModel
+from fastapi                 import FastAPI, HTTPException, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles     import StaticFiles
+from fastapi.responses       import FileResponse
+from pydantic                import BaseModel
 
+import whisper
 from inference import load_resources, run_silentspeak
 
 # ── Logging ───────────────────────────────────────────────────
@@ -46,11 +36,12 @@ DEMO_VIDEOS_DIR = os.path.join("assets", "demo_videos")
 VIZ_OUTPUT_DIR  = os.path.join("assets", "viz_output")
 UPLOAD_TEMP_DIR = os.path.join("assets", "uploads_temp")
 
-SUPPORTED_EXTENSIONS = {".mpg", ".mp4", ".avi", ".mpeg", ".mov", ".webm"}
-
+SUPPORTED_EXTENSIONS         = {".mpg", ".mp4", ".avi", ".mpeg", ".mov", ".webm"}
 WHISPER_CONFIDENCE_THRESHOLD = 0.70
 
 # ── Global state ──────────────────────────────────────────────
+# Holds: model, label_map, idx_to_label, face_cascade,
+#        mouth_cascade, full_sentence_map, whisper_model
 _resources: dict = {}
 
 
@@ -70,6 +61,7 @@ async def lifespan(app: FastAPI):
     os.makedirs(VIZ_OUTPUT_DIR,  exist_ok=True)
     os.makedirs(UPLOAD_TEMP_DIR, exist_ok=True)
 
+    # ── Step 1: Load TF model + cascades ──────────────────────
     log.info("Loading model and resources...")
     _resources.update(
         load_resources(
@@ -78,7 +70,28 @@ async def lifespan(app: FastAPI):
             viz_output_dir = VIZ_OUTPUT_DIR,
         )
     )
-    log.info("Model loaded. Server is ready.")
+    log.info("TF model loaded.")
+
+    # ── Step 2: Load Whisper ───────────────────────────────────
+    # inference.py expects whisper_model passed as a kwarg to
+    # run_silentspeak(). If it is None, Whisper NEVER runs —
+    # the pipeline silently falls back to lip-reading result.
+    # We load it here once at startup so it is always available.
+    log.info("Loading Whisper model (base)...")
+    try:
+        whisper_model = whisper.load_model("base")
+        _resources["whisper_model"] = whisper_model
+        log.info("Whisper model loaded successfully.")
+    except Exception as e:
+        # Non-fatal: server still works, Whisper fallback disabled
+        log.error(f"Whisper failed to load: {e}")
+        log.warning(
+            "Whisper unavailable — low-confidence predictions will "
+            "return lip-reading result instead of speech fallback."
+        )
+        _resources["whisper_model"] = None
+
+    log.info("Server is ready.")
     log.info("=" * 52)
 
     yield
@@ -110,8 +123,8 @@ app.add_middleware(
 )
 
 # ── Static file mounts ────────────────────────────────────────
-app.mount("/viz",    StaticFiles(directory=VIZ_OUTPUT_DIR),  name="viz")
-app.mount("/assets", StaticFiles(directory="assets"),        name="assets")
+app.mount("/viz",    StaticFiles(directory=VIZ_OUTPUT_DIR), name="viz")
+app.mount("/assets", StaticFiles(directory="assets"),       name="assets")
 
 
 # ============================================================
@@ -119,16 +132,10 @@ app.mount("/assets", StaticFiles(directory="assets"),        name="assets")
 # ============================================================
 
 def _ffmpeg_available() -> bool:
-    """Check if ffmpeg is installed on the system."""
     return shutil.which("ffmpeg") is not None
 
 
 def _convert_to_mp4(input_path: str, output_path: str) -> bool:
-    """
-    Convert any video to H.264 MP4 using ffmpeg.
-    Returns True on success, False on failure.
-    This is required because browsers cannot play .mpg natively.
-    """
     if not _ffmpeg_available():
         log.warning("ffmpeg not found — video conversion skipped.")
         return False
@@ -160,7 +167,6 @@ def _convert_to_mp4(input_path: str, output_path: str) -> bool:
 
 
 def _cleanup_temp(path: str):
-    """Safely delete a temporary file."""
     try:
         if path and os.path.exists(path):
             os.remove(path)
@@ -169,7 +175,7 @@ def _cleanup_temp(path: str):
 
 
 # ============================================================
-# MODELS
+# PYDANTIC MODELS
 # ============================================================
 
 class PredictRequest(BaseModel):
@@ -182,13 +188,13 @@ class Top3Item(BaseModel):
 
 
 class PredictResponse(BaseModel):
-    sentence    : str
-    label       : Optional[str]
-    confidence  : float
-    source      : str          # 'lip_reading' or 'speech_fallback'
-    top3        : List[Top3Item]
-    viz_paths   : List[str]
-    video_path  : str
+    sentence   : str
+    label      : Optional[str]
+    confidence : float
+    source     : str
+    top3       : List[Top3Item]
+    viz_paths  : List[str]
+    video_path : str
 
 
 class VideoListResponse(BaseModel):
@@ -196,90 +202,68 @@ class VideoListResponse(BaseModel):
 
 
 class HealthResponse(BaseModel):
-    status     : str
-    model_ready: bool
-    video_count: int
+    status        : str
+    model_ready   : bool
+    whisper_ready : bool
+    video_count   : int
 
 
 # ============================================================
-# SHARED INFERENCE HELPER
+# RESULT NORMALISER
 # ============================================================
 
-def _run_inference(video_path: str, source_type: str) -> PredictResponse:
+def _normalise_result(result: dict, video_path: str) -> PredictResponse:
     """
-    Shared inference logic used by both /predict and /predict/upload.
-
-    Flow:
-      1. Call run_silentspeak() from inference.py
-      2. Read confidence from result
-      3. If confidence < WHISPER_CONFIDENCE_THRESHOLD → Whisper fallback
-         was triggered inside inference.py; log it here for visibility
-      4. Normalise result fields and return PredictResponse
+    Normalise the dict returned by run_silentspeak() into a PredictResponse.
+    inference.py sets result['source_used'] to SOURCE_LIP or SOURCE_SPEECH.
     """
-    if not _resources:
-        raise HTTPException(
-            status_code = 503,
-            detail      = "Model not loaded. Server may still be starting.",
-        )
 
-    try:
-        result = run_silentspeak(
-            source_type = source_type,
-            resources   = _resources,
-            video_path  = video_path,
-        )
-    except Exception as e:
-        log.error(f"Inference failed: {e}", exc_info=True)
-        raise HTTPException(
-            status_code = 500,
-            detail      = f"Inference failed: {str(e)}",
-        )
-
-    # ── Whisper fallback detection + logging ──────────────────
     raw_confidence = float(result.get("confidence") or 0.0)
-    source_raw     = (
-        result.get("source")      or
+
+    source_raw = (
         result.get("source_used") or
+        result.get("source")      or
         "lip_reading"
     )
-    is_whisper_fallback = (
-        "whisper" in source_raw.lower() or
-        "speech"  in source_raw.lower() or
-        raw_confidence < WHISPER_CONFIDENCE_THRESHOLD
+
+    is_whisper = (
+        "speech" in source_raw.lower() or
+        "whisper" in source_raw.lower()
     )
 
-    if is_whisper_fallback:
+    if is_whisper:
         print("Whisper fallback triggered")
         log.warning(
-            f"Whisper fallback triggered — confidence={raw_confidence:.2%} "
-            f"(threshold={WHISPER_CONFIDENCE_THRESHOLD:.0%})  "
-            f"source='{source_raw}'"
+            f"Whisper fallback triggered — "
+            f"confidence={raw_confidence:.2%}  source='{source_raw}'"
         )
     else:
         log.info(
-            f"Lip-reading used — confidence={raw_confidence:.2%}  "
-            f"source='{source_raw}'"
+            f"Lip-reading used — "
+            f"confidence={raw_confidence:.2%}  source='{source_raw}'"
         )
 
-    # ── Normalise source field ────────────────────────────────
-    source = "speech_fallback" if is_whisper_fallback else "lip_reading"
+    source = "speech_fallback" if is_whisper else "lip_reading"
 
-    # ── Normalise top3 ────────────────────────────────────────
+    # Normalise top3 — inference.py returns list of (label, prob) tuples
     raw_top3   = result.get("top3") or []
     top3_items = []
     for item in raw_top3:
         if isinstance(item, (list, tuple)) and len(item) == 2:
-            top3_items.append(Top3Item(label=str(item[0]), confidence=round(float(item[1]), 4)))
+            top3_items.append(
+                Top3Item(label=str(item[0]), confidence=round(float(item[1]), 4))
+            )
         elif isinstance(item, dict):
             lbl  = item.get("label") or item.get("sentence") or ""
             prob = item.get("confidence") or item.get("probability") or 0.0
-            top3_items.append(Top3Item(label=str(lbl), confidence=round(float(prob), 4)))
+            top3_items.append(
+                Top3Item(label=str(lbl), confidence=round(float(prob), 4))
+            )
 
-    # ── Normalise viz_paths → /viz/<filename> URLs ────────────
+    # Normalise viz_paths → /viz/<filename>
     viz_urls = []
     for path in (result.get("viz_paths") or []):
-        filename = os.path.basename(path)
-        viz_urls.append(f"/viz/{filename}")
+        viz_urls.append(f"/viz/{os.path.basename(path)}")
 
     return PredictResponse(
         sentence   = result.get("sentence") or result.get("predicted_sentence") or "",
@@ -296,62 +280,49 @@ def _run_inference(video_path: str, source_type: str) -> PredictResponse:
 # ENDPOINTS
 # ============================================================
 
-# ── GET /health ───────────────────────────────────────────────
 @app.get("/health", response_model=HealthResponse)
 def health():
     video_count = len([
         f for f in os.listdir(DEMO_VIDEOS_DIR)
         if os.path.splitext(f)[1].lower() in SUPPORTED_EXTENSIONS
     ]) if os.path.exists(DEMO_VIDEOS_DIR) else 0
-
     return HealthResponse(
-        status      = "ok",
-        model_ready = bool(_resources),
-        video_count = video_count,
+        status        = "ok",
+        model_ready   = bool(_resources.get("model")),
+        whisper_ready = _resources.get("whisper_model") is not None,
+        video_count   = video_count,
     )
 
 
-# ── GET /videos ───────────────────────────────────────────────
 @app.get("/videos", response_model=VideoListResponse)
 def list_videos():
-    """Return list of demo video filenames for the frontend dropdown."""
     if not os.path.exists(DEMO_VIDEOS_DIR):
         return VideoListResponse(videos=[])
-
     video_files = sorted([
         f for f in os.listdir(DEMO_VIDEOS_DIR)
         if os.path.splitext(f)[1].lower() in SUPPORTED_EXTENSIONS
     ])
-
     log.info(f"GET /videos → {len(video_files)} videos")
     return VideoListResponse(videos=video_files)
 
 
-# ── GET /videos/stream/{filename} — browser-playable MP4 ─────
 @app.get("/videos/stream/{filename}")
 def stream_video(filename: str):
-    """
-    Serve a browser-playable MP4 version of a demo video.
-    Converts .mpg → .mp4 on first request and caches the result.
-    The frontend uses this URL for the <video> preview element.
-    """
-    filename   = os.path.basename(filename)
-    orig_path  = os.path.join(DEMO_VIDEOS_DIR, filename)
+    filename  = os.path.basename(filename)
+    orig_path = os.path.join(DEMO_VIDEOS_DIR, filename)
 
     if not os.path.exists(orig_path):
         raise HTTPException(status_code=404, detail=f"Video '{filename}' not found.")
 
-    # If already MP4, serve directly
     if filename.lower().endswith(".mp4"):
         return FileResponse(orig_path, media_type="video/mp4")
 
-    # Check for cached converted version
     base_name    = os.path.splitext(filename)[0]
     mp4_filename = f"{base_name}_converted.mp4"
     mp4_path     = os.path.join(DEMO_VIDEOS_DIR, mp4_filename)
 
     if not os.path.exists(mp4_path):
-        log.info(f"Converting {filename} → {mp4_filename} for browser playback...")
+        log.info(f"Converting {filename} → {mp4_filename}...")
         success = _convert_to_mp4(orig_path, mp4_path)
         if not success:
             log.warning("Serving original file without conversion.")
@@ -360,10 +331,13 @@ def stream_video(filename: str):
     return FileResponse(mp4_path, media_type="video/mp4")
 
 
-# ── POST /predict — demo video inference ─────────────────────
+# ── POST /predict — GRID demo video ──────────────────────────
 @app.post("/predict", response_model=PredictResponse)
 def predict(request: PredictRequest):
-    """Run inference on a selected GRID demo video."""
+    """
+    Run inference on a selected GRID demo video.
+    Passes whisper_model so fallback is available if confidence < 0.70.
+    """
     log.info(f"POST /predict  video={request.video_name}")
 
     video_name = os.path.basename(request.video_name)
@@ -378,63 +352,97 @@ def predict(request: PredictRequest):
     if not os.path.exists(video_path):
         raise HTTPException(status_code=404, detail=f"Video '{video_name}' not found.")
 
-    response = _run_inference(video_path, source_type="grid")
-    log.info(f"Prediction: '{response.sentence}' ({response.confidence:.2%}) via {response.source}")
-    return response
-
-
-# ── POST /predict/upload — upload / webcam inference ─────────
-@app.post("/predict/upload", response_model=PredictResponse)
-async def predict_upload(file: UploadFile = File(...)):
-    """
-    Receive an uploaded video file (or webcam blob) and run inference.
-
-    Accepts:
-      - Any video file upload from the browser file picker
-      - A recorded webcam blob sent as multipart/form-data
-      - Field name must be 'file'
-
-    The file is saved to a temporary location, inference runs,
-    then the temp file is cleaned up.
-    """
-    log.info(f"POST /predict/upload  filename={file.filename}  content_type={file.content_type}")
-
-    # ── Validate ──────────────────────────────────────────────
     if not _resources:
         raise HTTPException(status_code=503, detail="Model not loaded.")
 
-    # Determine extension — webcam blobs may have no extension
-    original_name = file.filename or "upload"
-    ext           = os.path.splitext(original_name)[1].lower()
-
-    # Fallback: infer extension from content type
-    if not ext or ext not in SUPPORTED_EXTENSIONS:
-        ct = (file.content_type or "").lower()
-        if   "webm" in ct:  ext = ".webm"
-        elif "mp4"  in ct:  ext = ".mp4"
-        elif "mpeg" in ct or "mpg" in ct: ext = ".mpg"
-        elif "avi"  in ct:  ext = ".avi"
-        elif "mov"  in ct or "quicktime" in ct: ext = ".mov"
-        else:               ext = ".webm"  # safe default for webcam
-
-    # ── Save temp file ────────────────────────────────────────
-    temp_name = f"upload_{uuid.uuid4().hex}{ext}"
-    temp_path = os.path.join(UPLOAD_TEMP_DIR, temp_name)
+    whisper_model = _resources.get("whisper_model")
+    if whisper_model is None:
+        log.warning("POST /predict — Whisper not available, fallback disabled.")
 
     try:
-        with open(temp_path, "wb") as f:
-            contents = await file.read()
-            f.write(contents)
-        log.info(f"Saved temp file: {temp_path}  size={len(contents)} bytes")
+        result = run_silentspeak(
+            source_type   = "grid",
+            resources     = _resources,
+            video_path    = video_path,     # ✅ grid kwarg
+            whisper_model = whisper_model,  # ✅ None-safe: inference.py handles None
+        )
     except Exception as e:
-        _cleanup_temp(temp_path)
-        raise HTTPException(status_code=500, detail=f"Failed to save uploaded file: {str(e)}")
+        log.error(f"Inference failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Inference failed: {str(e)}")
+
+    response = _normalise_result(result, video_path)
+    log.info(
+        f"Prediction: '{response.sentence}' "
+        f"({response.confidence:.2%}) via {response.source}"
+    )
+    return response
+
+
+# ── POST /predict/upload — uploaded file or webcam blob ──────
+@app.post("/predict/upload", response_model=PredictResponse)
+async def predict_upload(file: UploadFile = File(...)):
+    """
+    Run inference on an uploaded video or webcam recording.
+    Passes whisper_model so fallback is available if confidence < 0.70.
+    """
+    log.info(
+        f"POST /predict/upload  "
+        f"filename={file.filename}  content_type={file.content_type}"
+    )
+
+    if not _resources:
+        raise HTTPException(status_code=503, detail="Model not loaded.")
+
+    # ── Read bytes ────────────────────────────────────────────
+    try:
+        video_bytes = await file.read()
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to read uploaded file: {str(e)}"
+        )
+
+    if not video_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    log.info(f"Received {len(video_bytes)} bytes")
+
+    # ── Resolve extension ─────────────────────────────────────
+    original_name = file.filename or "upload.mp4"
+    ext           = os.path.splitext(original_name)[1].lower()
+
+    if not ext or ext not in SUPPORTED_EXTENSIONS:
+        ct = (file.content_type or "").lower()
+        if   "webm"      in ct: ext = ".webm"
+        elif "mp4"       in ct: ext = ".mp4"
+        elif "mpeg"      in ct or "mpg" in ct: ext = ".mpg"
+        elif "avi"       in ct: ext = ".avi"
+        elif "quicktime" in ct or "mov" in ct: ext = ".mov"
+        else:                   ext = ".webm"
+
+    safe_filename = f"upload_{uuid.uuid4().hex}{ext}"
+
+    whisper_model = _resources.get("whisper_model")
+    if whisper_model is None:
+        log.warning("POST /predict/upload — Whisper not available, fallback disabled.")
 
     # ── Run inference ─────────────────────────────────────────
     try:
-        response = _run_inference(temp_path, source_type="upload")
-        log.info(f"Upload prediction: '{response.sentence}' ({response.confidence:.2%}) via {response.source}")
-        return response
-    finally:
-        # Always clean up temp file regardless of success or failure
-        _cleanup_temp(temp_path)
+        result = run_silentspeak(
+            source_type   = "upload",
+            resources     = _resources,
+            video_bytes   = video_bytes,    # ✅ upload kwarg
+            filename      = safe_filename,  # ✅ for extension detection
+            whisper_model = whisper_model,  # ✅ None-safe
+        )
+    except Exception as e:
+        log.error(f"Upload inference failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Inference failed: {str(e)}")
+
+    video_path = result.get("video_path") or safe_filename
+    response   = _normalise_result(result, video_path)
+    log.info(
+        f"Upload prediction: '{response.sentence}' "
+        f"({response.confidence:.2%}) via {response.source}"
+    )
+    return response
