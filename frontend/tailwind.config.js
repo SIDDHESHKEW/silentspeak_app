@@ -4,27 +4,28 @@ export default {
   theme: {
     extend: {
       colors: {
-        deep:    '#0b0f17',
-        card:    '#0d1421',
-        panel:   '#111827',
-        surface: '#131c2e',
-        cyber: {
-          DEFAULT: '#00d4ff',
-          soft:    '#7df9ff',
-          dim:     '#00d4ff60',
-          glow:    '#00d4ff20',
+        deep:    '#111827',
+        card:    '#1f2937',
+        panel:   '#1f2937',
+        surface: '#374151',
+        accent: {
+          DEFAULT: '#3b82f6',
+          soft:    '#38bdf8',
+          green:   '#22c55e',
+          dim:     '#3b82f660',
+          glow:    '#3b82f615',
         },
         border: {
-          DEFAULT: '#1e2d3d',
-          bright:  '#00d4ff30',
+          DEFAULT: '#374151',
+          bright:  '#3b82f625',
         },
         ink: {
-          primary:   '#e6f1ff',
-          secondary: '#8892a4',
-          muted:     '#4a5568',
+          primary:   '#f9fafb',
+          secondary: '#9ca3af',
+          muted:     '#6b7280',
         },
         status: {
-          success: '#10b981',
+          success: '#22c55e',
           warning: '#f59e0b',
           danger:  '#ef4444',
         },
@@ -34,27 +35,27 @@ export default {
         sans: ['Syne', 'system-ui', 'sans-serif'],
       },
       backgroundImage: {
-        'hero-gradient': 'radial-gradient(ellipse 80% 60% at 50% 0%, #00d4ff0d, transparent 70%)',
-        'card-gradient': 'linear-gradient(135deg, #0d1421, #111827)',
-        'cyber-gradient': 'linear-gradient(135deg, #00d4ff, #7df9ff)',
+        'hero-gradient':  'radial-gradient(ellipse 80% 50% at 50% 0%, #3b82f60a, transparent 70%)',
+        'card-gradient':  'linear-gradient(135deg, #1f2937, #374151)',
+        'accent-gradient':'linear-gradient(135deg, #3b82f6, #38bdf8)',
       },
       boxShadow: {
-        'cyber':       '0 0 16px #00d4ff18, 0 0 48px #00d4ff0a',
-        'cyber-strong':'0 0 24px #00d4ff30, 0 0 80px #00d4ff15',
-        'card':        '0 4px 24px rgba(0,0,0,0.4)',
+        'accent':        '0 0 12px #3b82f612, 0 0 32px #3b82f608',
+        'accent-strong': '0 0 20px #3b82f622, 0 0 60px #3b82f610',
+        'card':          '0 4px 24px rgba(0,0,0,0.35)',
       },
       animation: {
-        'scan':         'scan 5s linear infinite',
-        'pulse-slow':   'pulse 3s ease-in-out infinite',
-        'pulse-glow':   'pulseGlow 2.5s ease-in-out infinite',
-        'flicker':      'flicker 0.15s infinite',
-        'fade-in':      'fadeIn 0.5s ease forwards',
-        'slide-up':     'slideUp 0.5s ease forwards',
-        'slide-down':   'slideDown 0.4s ease forwards',
-        'orbit':        'orbitRing 8s linear infinite',
-        'orbit-reverse':'orbitRingReverse 6s linear infinite',
-        'spin-slow':    'spin 3s linear infinite',
-        'blink':        'blink 1s step-end infinite',
+        'scan':          'scan 6s linear infinite',
+        'pulse-slow':    'pulse 3s ease-in-out infinite',
+        'pulse-glow':    'pulseGlow 2.5s ease-in-out infinite',
+        'flicker':       'flicker 0.15s infinite',
+        'fade-in':       'fadeIn 0.5s ease forwards',
+        'slide-up':      'slideUp 0.5s ease forwards',
+        'slide-down':    'slideDown 0.4s ease forwards',
+        'orbit':         'orbitRing 8s linear infinite',
+        'orbit-reverse': 'orbitRingReverse 6s linear infinite',
+        'spin-slow':     'spin 3s linear infinite',
+        'blink':         'blink 1s step-end infinite',
       },
       keyframes: {
         scan: {
@@ -63,7 +64,7 @@ export default {
         },
         flicker: {
           '0%, 100%': { opacity: 1 },
-          '50%':      { opacity: 0.85 },
+          '50%':      { opacity: 0.88 },
         },
         fadeIn: {
           from: { opacity: 0 },
@@ -78,8 +79,8 @@ export default {
           to:   { opacity: 1, transform: 'translateY(0)' },
         },
         pulseGlow: {
-          '0%, 100%': { boxShadow: '0 0 16px #00d4ff18' },
-          '50%':      { boxShadow: '0 0 36px #00d4ff35, 0 0 72px #00d4ff15' },
+          '0%, 100%': { boxShadow: '0 0 12px #3b82f612' },
+          '50%':      { boxShadow: '0 0 28px #3b82f628, 0 0 56px #3b82f610' },
         },
         orbitRing: {
           from: { transform: 'rotate(0deg)' },
@@ -95,14 +96,14 @@ export default {
         },
       },
       maxWidth: {
-        'modal': '600px',
+        modal: '600px',
       },
       borderRadius: {
-        'xl2': '1rem',
-        'xl3': '1.5rem',
+        xl2: '1rem',
+        xl3: '1.5rem',
       },
       transitionDuration: {
-        '400': '400ms',
+        400: '400ms',
       },
     },
   },
