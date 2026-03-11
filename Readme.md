@@ -42,7 +42,7 @@ silentspeak/
 │       ├── demo_videos/         ← .mpg GRID demo videos
 │       └── viz_output/          ← Detection visualization images
 │
-└── silentspeak-frontend/        ← React + Vite + TailwindCSS UI
+└── frontend/        ← React + Vite + TailwindCSS UI
     ├── src/
     │   ├── App.jsx
     │   └── components/
@@ -52,6 +52,7 @@ silentspeak/
     │       ├── VideoPreview.jsx
     │       ├── ProcessingScreen.jsx
     │       └── ResultPanel.jsx
+    |__ index.html
     ├── package.json
     └── vite.config.js
 ```
