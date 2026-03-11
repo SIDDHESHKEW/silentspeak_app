@@ -57,7 +57,7 @@ const howItWorks = [
 
 const vizLabels = [
   { key: 'original', label: 'Original Frame' },
-  { key: 'face',     label: 'Face Detection' },
+  { key: 'detect',   label: 'Face Detection' },  // ✅ was 'face' — inference saves *_detect.jpg
   { key: 'lip',      label: 'Lip Crop'       },
 ]
 
@@ -70,7 +70,6 @@ function NeuralCanvas() {
     if (!canvas) return
     const ctx = canvas.getContext('2d')
 
-    // Nodes
     const nodes = Array.from({ length: 28 }, () => ({
       x:   Math.random() * canvas.width,
       y:   Math.random() * canvas.height,
@@ -84,7 +83,6 @@ function NeuralCanvas() {
     const draw = () => {
       ctx.clearRect(0, 0, canvas.width, canvas.height)
 
-      // Move nodes
       nodes.forEach(n => {
         n.x += n.vx
         n.y += n.vy
@@ -92,7 +90,6 @@ function NeuralCanvas() {
         if (n.y < 0 || n.y > canvas.height) n.vy *= -1
       })
 
-      // Draw edges between nearby nodes
       for (let i = 0; i < nodes.length; i++) {
         for (let j = i + 1; j < nodes.length; j++) {
           const dx   = nodes[i].x - nodes[j].x
@@ -109,7 +106,6 @@ function NeuralCanvas() {
         }
       }
 
-      // Draw nodes
       nodes.forEach(n => {
         ctx.beginPath()
         ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2)
@@ -120,7 +116,6 @@ function NeuralCanvas() {
       animId = requestAnimationFrame(draw)
     }
 
-    // Resize handler
     const resize = () => {
       canvas.width  = canvas.offsetWidth
       canvas.height = canvas.offsetHeight
@@ -147,14 +142,13 @@ function NeuralCanvas() {
 // ── Main component ────────────────────────────────────────────
 export default function InputSelector({ onSelect }) {
   return (
-    // Outer wrapper: two columns on xl+, single column below
     <div className="w-full flex flex-col xl:flex-row xl:items-start">
 
-      {/* ── LEFT COLUMN — main content ── */}
+      {/* ── LEFT COLUMN ── */}
       <div className="flex-1 px-6 sm:px-10 pb-20 min-w-0">
         <div className="max-w-3xl">
 
-          {/* ── Input option cards ── */}
+          {/* Input option cards */}
           <div className="grid gap-3 mb-16">
             {options.map((opt, i) => (
               <button
@@ -210,7 +204,7 @@ export default function InputSelector({ onSelect }) {
             ))}
           </div>
 
-          {/* ── Pipeline ── */}
+          {/* Pipeline */}
           <div className="mb-16 animate-fade-in"
             style={{ animationDelay: '0.3s', animationFillMode: 'forwards', opacity: 0 }}>
             <div className="flex items-center gap-3 mb-5">
@@ -235,7 +229,7 @@ export default function InputSelector({ onSelect }) {
             </div>
           </div>
 
-          {/* ── Visualization showcase ── */}
+          {/* Visualization showcase */}
           <div className="animate-fade-in"
             style={{ animationDelay: '0.45s', animationFillMode: 'forwards', opacity: 0 }}>
             <div className="flex items-center gap-3 mb-5">
@@ -282,23 +276,21 @@ export default function InputSelector({ onSelect }) {
         </div>
       </div>
 
-      {/* ── RIGHT COLUMN — animated neural visual, xl screens only ── */}
+      {/* ── RIGHT COLUMN — xl screens only ── */}
       <div
         className="hidden xl:flex flex-col items-center justify-start pt-4 pr-10"
         style={{ width: '380px', flexShrink: 0 }}
       >
-        {/* Sticky panel */}
         <div
           className="sticky top-8 w-full rounded-xl overflow-hidden animate-fade-in"
           style={{
-            background:       '#1f2937',
-            border:           '1px solid #374151',
-            animationDelay:   '0.5s',
-            animationFillMode:'forwards',
-            opacity:          0,
+            background:        '#1f2937',
+            border:            '1px solid #374151',
+            animationDelay:    '0.5s',
+            animationFillMode: 'forwards',
+            opacity:           0,
           }}
         >
-          {/* Header */}
           <div className="px-5 py-3 flex items-center gap-2"
             style={{ borderBottom: '1px solid #374151' }}>
             <div className="w-1.5 h-1.5 rounded-full animate-pulse"
@@ -307,12 +299,10 @@ export default function InputSelector({ onSelect }) {
               style={{ color: '#6b7280' }}>NEURAL NETWORK</span>
           </div>
 
-          {/* Canvas */}
           <div style={{ height: '260px', background: '#111827' }}>
             <NeuralCanvas />
           </div>
 
-          {/* Stats below canvas */}
           <div className="p-5 grid grid-cols-3 gap-3">
             {[
               { label: 'Model',    value: '3D-CNN' },
@@ -329,7 +319,6 @@ export default function InputSelector({ onSelect }) {
             ))}
           </div>
 
-          {/* Pipeline trace */}
           <div className="px-5 pb-5">
             <div className="font-mono text-xs mb-3" style={{ color: '#6b7280' }}>
               INFERENCE PIPELINE

@@ -39,10 +39,109 @@ UPLOAD_TEMP_DIR = os.path.join("assets", "uploads_temp")
 SUPPORTED_EXTENSIONS         = {".mpg", ".mp4", ".avi", ".mpeg", ".mov", ".webm"}
 WHISPER_CONFIDENCE_THRESHOLD = 0.70
 
+# ── viz_output cleanup config ─────────────────────────────────
+# Max number of inference-generated files allowed in viz_output.
+# sample_*.jpg are ALWAYS protected and never counted or deleted.
+VIZ_MAX_FILES = 60
+
+# The 3 permanent dashboard sample filenames — never deleted
+VIZ_SAMPLE_FILES = {
+    "sample_original.jpg",
+    "sample_detect.jpg",
+    "sample_lip.jpg",
+}
+
 # ── Global state ──────────────────────────────────────────────
-# Holds: model, label_map, idx_to_label, face_cascade,
-#        mouth_cascade, full_sentence_map, whisper_model
 _resources: dict = {}
+
+
+# ============================================================
+# VIZ OUTPUT HELPERS
+# ============================================================
+
+def _seed_sample_images(viz_paths: List[str]) -> None:
+    """
+    After the first successful inference, copy one frame of each
+    type into the three permanent dashboard sample files.
+
+    Only runs if any sample file is missing — never overwrites
+    an existing sample so the dashboard stays stable.
+
+    viz_paths: list of absolute or relative paths written by
+               inference.py, e.g. [..._original.jpg, ..._detect.jpg,
+               ..._lip.jpg, ...]
+    """
+    targets = {
+        "original": os.path.join(VIZ_OUTPUT_DIR, "sample_original.jpg"),
+        "detect":   os.path.join(VIZ_OUTPUT_DIR, "sample_detect.jpg"),
+        "lip":      os.path.join(VIZ_OUTPUT_DIR, "sample_lip.jpg"),
+    }
+
+    # Skip entirely if all three already exist
+    if all(os.path.exists(p) for p in targets.values()):
+        return
+
+    # Build lookup: suffix-keyword → first matching path
+    found = {}
+    for path in viz_paths:
+        fname = os.path.basename(path)
+        for key in ("original", "detect", "lip"):
+            if key not in found and f"_{key}." in fname:
+                found[key] = path
+
+    for key, dest in targets.items():
+        if os.path.exists(dest):
+            continue                         # already seeded, keep it
+        src = found.get(key)
+        if src and os.path.exists(src):
+            try:
+                shutil.copy2(src, dest)
+                log.info(f"Seeded dashboard sample: {dest}")
+            except Exception as e:
+                log.warning(f"Could not seed {dest}: {e}")
+
+
+def _cleanup_viz_output() -> None:
+    """
+    Keep viz_output tidy. Rules:
+      - sample_*.jpg are NEVER touched
+      - Count all other .jpg files
+      - If count > VIZ_MAX_FILES, delete oldest (by mtime) until
+        count == VIZ_MAX_FILES
+    """
+    if not os.path.exists(VIZ_OUTPUT_DIR):
+        return
+
+    all_files = []
+    for fname in os.listdir(VIZ_OUTPUT_DIR):
+        if not fname.lower().endswith(".jpg"):
+            continue
+        if fname in VIZ_SAMPLE_FILES:
+            continue                         # protected — never delete
+        full = os.path.join(VIZ_OUTPUT_DIR, fname)
+        if os.path.isfile(full):
+            all_files.append(full)
+
+    overflow = len(all_files) - VIZ_MAX_FILES
+    if overflow <= 0:
+        return
+
+    # Sort oldest-first by modification time
+    all_files.sort(key=lambda p: os.path.getmtime(p))
+
+    deleted = 0
+    for path in all_files[:overflow]:
+        try:
+            os.remove(path)
+            deleted += 1
+        except Exception as e:
+            log.warning(f"Could not delete viz file {path}: {e}")
+
+    log.info(
+        f"viz_output cleanup: removed {deleted} file(s), "
+        f"{len(all_files) - deleted} remain "
+        f"(limit={VIZ_MAX_FILES}, protected={len(VIZ_SAMPLE_FILES)})"
+    )
 
 
 # ── Lifespan ──────────────────────────────────────────────────
@@ -61,7 +160,6 @@ async def lifespan(app: FastAPI):
     os.makedirs(VIZ_OUTPUT_DIR,  exist_ok=True)
     os.makedirs(UPLOAD_TEMP_DIR, exist_ok=True)
 
-    # ── Step 1: Load TF model + cascades ──────────────────────
     log.info("Loading model and resources...")
     _resources.update(
         load_resources(
@@ -72,18 +170,12 @@ async def lifespan(app: FastAPI):
     )
     log.info("TF model loaded.")
 
-    # ── Step 2: Load Whisper ───────────────────────────────────
-    # inference.py expects whisper_model passed as a kwarg to
-    # run_silentspeak(). If it is None, Whisper NEVER runs —
-    # the pipeline silently falls back to lip-reading result.
-    # We load it here once at startup so it is always available.
     log.info("Loading Whisper model (base)...")
     try:
         whisper_model = whisper.load_model("base")
         _resources["whisper_model"] = whisper_model
         log.info("Whisper model loaded successfully.")
     except Exception as e:
-        # Non-fatal: server still works, Whisper fallback disabled
         log.error(f"Whisper failed to load: {e}")
         log.warning(
             "Whisper unavailable — low-confidence predictions will "
@@ -213,11 +305,6 @@ class HealthResponse(BaseModel):
 # ============================================================
 
 def _normalise_result(result: dict, video_path: str) -> PredictResponse:
-    """
-    Normalise the dict returned by run_silentspeak() into a PredictResponse.
-    inference.py sets result['source_used'] to SOURCE_LIP or SOURCE_SPEECH.
-    """
-
     raw_confidence = float(result.get("confidence") or 0.0)
 
     source_raw = (
@@ -227,7 +314,7 @@ def _normalise_result(result: dict, video_path: str) -> PredictResponse:
     )
 
     is_whisper = (
-        "speech" in source_raw.lower() or
+        "speech"  in source_raw.lower() or
         "whisper" in source_raw.lower()
     )
 
@@ -245,7 +332,6 @@ def _normalise_result(result: dict, video_path: str) -> PredictResponse:
 
     source = "speech_fallback" if is_whisper else "lip_reading"
 
-    # Normalise top3 — inference.py returns list of (label, prob) tuples
     raw_top3   = result.get("top3") or []
     top3_items = []
     for item in raw_top3:
@@ -260,7 +346,6 @@ def _normalise_result(result: dict, video_path: str) -> PredictResponse:
                 Top3Item(label=str(lbl), confidence=round(float(prob), 4))
             )
 
-    # Normalise viz_paths → /viz/<filename>
     viz_urls = []
     for path in (result.get("viz_paths") or []):
         viz_urls.append(f"/viz/{os.path.basename(path)}")
@@ -274,6 +359,21 @@ def _normalise_result(result: dict, video_path: str) -> PredictResponse:
         viz_paths  = viz_urls,
         video_path = video_path,
     )
+
+
+# ============================================================
+# POST-INFERENCE HOUSEKEEPING
+# ============================================================
+
+def _post_inference_housekeeping(result: dict) -> None:
+    """
+    Called after every successful inference.
+    1. Seed the 3 permanent dashboard sample images if missing.
+    2. Enforce VIZ_MAX_FILES limit, deleting oldest non-sample files.
+    """
+    viz_paths = result.get("viz_paths") or []
+    _seed_sample_images(viz_paths)
+    _cleanup_viz_output()
 
 
 # ============================================================
@@ -334,10 +434,6 @@ def stream_video(filename: str):
 # ── POST /predict — GRID demo video ──────────────────────────
 @app.post("/predict", response_model=PredictResponse)
 def predict(request: PredictRequest):
-    """
-    Run inference on a selected GRID demo video.
-    Passes whisper_model so fallback is available if confidence < 0.70.
-    """
     log.info(f"POST /predict  video={request.video_name}")
 
     video_name = os.path.basename(request.video_name)
@@ -363,12 +459,15 @@ def predict(request: PredictRequest):
         result = run_silentspeak(
             source_type   = "grid",
             resources     = _resources,
-            video_path    = video_path,     # ✅ grid kwarg
-            whisper_model = whisper_model,  # ✅ None-safe: inference.py handles None
+            video_path    = video_path,
+            whisper_model = whisper_model,
         )
     except Exception as e:
         log.error(f"Inference failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Inference failed: {str(e)}")
+
+    # ── Housekeeping: seed samples + enforce size limit ───────
+    _post_inference_housekeeping(result)
 
     response = _normalise_result(result, video_path)
     log.info(
@@ -381,10 +480,6 @@ def predict(request: PredictRequest):
 # ── POST /predict/upload — uploaded file or webcam blob ──────
 @app.post("/predict/upload", response_model=PredictResponse)
 async def predict_upload(file: UploadFile = File(...)):
-    """
-    Run inference on an uploaded video or webcam recording.
-    Passes whisper_model so fallback is available if confidence < 0.70.
-    """
     log.info(
         f"POST /predict/upload  "
         f"filename={file.filename}  content_type={file.content_type}"
@@ -393,7 +488,6 @@ async def predict_upload(file: UploadFile = File(...)):
     if not _resources:
         raise HTTPException(status_code=503, detail="Model not loaded.")
 
-    # ── Read bytes ────────────────────────────────────────────
     try:
         video_bytes = await file.read()
     except Exception as e:
@@ -407,7 +501,6 @@ async def predict_upload(file: UploadFile = File(...)):
 
     log.info(f"Received {len(video_bytes)} bytes")
 
-    # ── Resolve extension ─────────────────────────────────────
     original_name = file.filename or "upload.mp4"
     ext           = os.path.splitext(original_name)[1].lower()
 
@@ -426,18 +519,20 @@ async def predict_upload(file: UploadFile = File(...)):
     if whisper_model is None:
         log.warning("POST /predict/upload — Whisper not available, fallback disabled.")
 
-    # ── Run inference ─────────────────────────────────────────
     try:
         result = run_silentspeak(
             source_type   = "upload",
             resources     = _resources,
-            video_bytes   = video_bytes,    # ✅ upload kwarg
-            filename      = safe_filename,  # ✅ for extension detection
-            whisper_model = whisper_model,  # ✅ None-safe
+            video_bytes   = video_bytes,
+            filename      = safe_filename,
+            whisper_model = whisper_model,
         )
     except Exception as e:
         log.error(f"Upload inference failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Inference failed: {str(e)}")
+
+    # ── Housekeeping: seed samples + enforce size limit ───────
+    _post_inference_housekeeping(result)
 
     video_path = result.get("video_path") or safe_filename
     response   = _normalise_result(result, video_path)
