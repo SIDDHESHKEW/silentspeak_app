@@ -616,8 +616,9 @@ def decode_prediction(
 
 
 def run_silentspeak(
-    source_type : str,
-    resources   : dict,
+    source_type          : str,
+    resources            : dict,
+    confidence_threshold : float = CONFIDENCE_THRESHOLD,
     **kwargs,
 ) -> dict:
     """
@@ -712,12 +713,12 @@ def run_silentspeak(
 
     # ── STEP 4: Confidence Gate ───────────────────────────────
     print("\n── STEP 4/5  Confidence Gate ───────────────────────")
-    print(f"  Confidence : {confidence:.2%}  |  Threshold : {CONFIDENCE_THRESHOLD:.0%}")
+    print(f"  Confidence : {confidence:.2%}  |  Threshold : {confidence_threshold:.0%}")
 
     # ╔══════════════════════════════╗
     # ║  BRANCH A — LIP READING     ║
     # ╚══════════════════════════════╝
-    if confidence >= CONFIDENCE_THRESHOLD:
+    if confidence >= confidence_threshold:
         print("  ✅ BRANCH A — LIP READING")
         try:
             sentence = decode_prediction(

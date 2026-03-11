@@ -3,9 +3,12 @@ import { useState, useEffect, useRef } from 'react'
 const API = 'http://localhost:8000'
 
 function getSupportedMimeType() {
+  // Prefer codecs that explicitly include opus audio
+  // Fall back to plain webm if nothing better is supported
   const types = [
     'video/webm;codecs=vp9,opus',
     'video/webm;codecs=vp8,opus',
+    'video/webm;codecs=h264,opus',
     'video/webm',
     'video/mp4',
   ]
@@ -21,6 +24,7 @@ export default function VideoPreview({ inputType, onPredict, onBack }) {
   const [recording,      setRecording]      = useState(false)
   const [recordingTime,  setRecordingTime]  = useState(0)
   const [cameraReady,    setCameraReady]    = useState(false)
+  const [audioEnabled,   setAudioEnabled]   = useState(false)
 
   const fileInputRef     = useRef(null)
   const videoRef         = useRef(null)
@@ -55,51 +59,106 @@ export default function VideoPreview({ inputType, onPredict, onBack }) {
   const startWebcam = async () => {
     try {
       stopStream()
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+      // Request both video AND audio explicitly
+      // Audio is required for Whisper fallback to work
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 25 } },
+        audio: { echoCancellation: true, noiseSuppression: true, sampleRate: 16000 },
+      })
+
       streamRef.current = stream
+
+      // Check audio track is actually present
+      const audioTracks = stream.getAudioTracks()
+      const hasAudio    = audioTracks.length > 0 && audioTracks[0].enabled
+      setAudioEnabled(hasAudio)
+
+      if (!hasAudio) {
+        console.warn('No audio track in stream — Whisper fallback will not work')
+      }
+
       if (videoRef.current) {
         videoRef.current.srcObject = stream
-        videoRef.current.muted = true
+        videoRef.current.muted     = true  // mute preview only, NOT the recorder
       }
       setCameraReady(true)
       setRecordedBlob(null)
     } catch (err) {
-      alert('Cannot access camera: ' + err.message)
+      alert('Cannot access camera/microphone: ' + err.message)
     }
   }
 
   const startRecording = () => {
     if (!streamRef.current) return
     chunksRef.current = []
+
     const mimeType = getSupportedMimeType()
-    const mr = new MediaRecorder(streamRef.current, mimeType ? { mimeType } : {})
+
+    // Verify all tracks before starting
+    const tracks = streamRef.current.getTracks()
+    const videoTrack = tracks.find(t => t.kind === 'video')
+    const audioTrack = tracks.find(t => t.kind === 'audio')
+
+    if (!videoTrack) {
+      alert('No video track available. Please restart camera.')
+      return
+    }
+
+    if (!audioTrack) {
+      console.warn('Recording without audio — Whisper fallback will be unavailable')
+    }
+
+    const options = {}
+    if (mimeType) options.mimeType = mimeType
+    // Request data every 100ms for better audio capture granularity
+    // 200ms chunks can cause first chunk to miss audio header
+    const mr = new MediaRecorder(streamRef.current, options)
     mediaRecorderRef.current = mr
-    mr.ondataavailable = e => { if (e.data?.size > 0) chunksRef.current.push(e.data) }
+
+    mr.ondataavailable = e => {
+      if (e.data && e.data.size > 0) chunksRef.current.push(e.data)
+    }
+
     mr.onstop = () => {
-      const blob = new Blob(chunksRef.current, { type: mimeType || 'video/webm' })
+      const finalMime = mimeType || 'video/webm'
+      const blob = new Blob(chunksRef.current, { type: finalMime })
       setRecordedBlob(blob)
       stopStream()
       setCameraReady(false)
+
       if (videoRef.current) {
         videoRef.current.srcObject = null
-        videoRef.current.src = URL.createObjectURL(blob)
-        videoRef.current.muted = false
+        videoRef.current.src       = URL.createObjectURL(blob)
+        videoRef.current.muted     = false  // unmute playback so user can verify audio
         videoRef.current.load()
       }
     }
-    mr.start(200)
+
+    mr.onerror = e => {
+      console.error('MediaRecorder error:', e)
+    }
+
+    // 100ms timeslice for reliable audio chunk capture
+    mr.start(100)
     setRecording(true)
     setRecordingTime(0)
     timerRef.current = setInterval(() => setRecordingTime(t => t + 1), 1000)
   }
 
   const stopRecording = () => {
-    if (mediaRecorderRef.current?.state !== 'inactive') mediaRecorderRef.current.stop()
+    if (mediaRecorderRef.current?.state !== 'inactive') {
+      mediaRecorderRef.current.stop()
+    }
     clearInterval(timerRef.current)
     setRecording(false)
   }
 
-  const handleReRecord = () => { setRecordedBlob(null); setRecordingTime(0); startWebcam() }
+  const handleReRecord = () => {
+    setRecordedBlob(null)
+    setRecordingTime(0)
+    setAudioEnabled(false)
+    startWebcam()
+  }
 
   const handleFileChange = (e) => {
     const f = e.target.files[0]
@@ -107,7 +166,11 @@ export default function VideoPreview({ inputType, onPredict, onBack }) {
     setUploadedFile(f)
     setUploadProgress(0)
     let p = 0
-    const iv = setInterval(() => { p += 20; setUploadProgress(p); if (p >= 100) clearInterval(iv) }, 80)
+    const iv = setInterval(() => {
+      p += 20
+      setUploadProgress(p)
+      if (p >= 100) clearInterval(iv)
+    }, 80)
   }
 
   const handlePredict = () => {
@@ -123,8 +186,7 @@ export default function VideoPreview({ inputType, onPredict, onBack }) {
 
   const modeLabel = { grid: 'DEMO VIDEO', upload: 'UPLOAD', webcam: 'WEBCAM' }[inputType] || ''
 
-  // Shared panel style
-  const panelStyle = { border: '1px solid #374151', borderRadius: '8px', overflow: 'hidden' }
+  const panelStyle  = { border: '1px solid #374151', borderRadius: '8px', overflow: 'hidden' }
   const panelHeader = { background: '#111827', color: '#6b7280', borderBottom: '1px solid #374151' }
 
   return (
@@ -197,7 +259,6 @@ export default function VideoPreview({ inputType, onPredict, onBack }) {
                     className="w-full"
                     style={{ maxHeight: '320px', background: '#000', display: 'block' }}
                   >
-                    {/* /videos/stream/ converts .mpg → .mp4 for browser playback */}
                     <source src={`${API}/videos/stream/${selected}`} type="video/mp4" />
                     Your browser does not support video playback.
                   </video>
@@ -218,7 +279,7 @@ export default function VideoPreview({ inputType, onPredict, onBack }) {
                   onClick={() => fileInputRef.current.click()}
                   className="w-full p-12 rounded-lg border-2 border-dashed flex flex-col items-center gap-4 transition-all duration-200"
                   style={{ borderColor: '#374151', background: '#1f2937' }}
-                  onMouseEnter={e => { e.currentTarget.style.borderColor = '#3b82f640'; e.currentTarget.style.background = '#1f2937' }}
+                  onMouseEnter={e => { e.currentTarget.style.borderColor = '#3b82f640' }}
                   onMouseLeave={e => { e.currentTarget.style.borderColor = '#374151' }}
                 >
                   <svg viewBox="0 0 24 24" fill="none" stroke="#3b82f6" strokeWidth="1.5" className="w-10 h-10 opacity-50">
@@ -276,11 +337,19 @@ export default function VideoPreview({ inputType, onPredict, onBack }) {
                     <span className="w-2 h-2 rounded-full animate-pulse inline-block"
                       style={{ background: '#ef4444' }} />
                   )}
-                  <span>
-                    {recording    ? `RECORDING — ${recordingTime}s`   :
-                     recordedBlob ? 'RECORDED — Ready to predict'     :
-                     cameraReady  ? 'CAMERA READY'                    : 'CAMERA PREVIEW'}
+                  <span style={{ flex: 1 }}>
+                    {recording    ? `RECORDING — ${recordingTime}s`  :
+                     recordedBlob ? 'RECORDED — Ready to predict'    :
+                     cameraReady  ? 'CAMERA READY'                   : 'CAMERA PREVIEW'}
                   </span>
+                  {/* Audio indicator */}
+                  {(cameraReady || recording) && (
+                    <span className="font-mono text-xs flex items-center gap-1"
+                      style={{ color: audioEnabled ? '#22c55e' : '#f59e0b' }}>
+                      <span>{audioEnabled ? '🎤' : '🔇'}</span>
+                      <span>{audioEnabled ? 'AUDIO ON' : 'NO AUDIO'}</span>
+                    </span>
+                  )}
                 </div>
                 <video
                   ref={videoRef}
@@ -290,6 +359,15 @@ export default function VideoPreview({ inputType, onPredict, onBack }) {
                   style={{ maxHeight: '320px', background: '#000', display: 'block' }}
                 />
               </div>
+
+              {/* Audio warning — Whisper needs audio */}
+              {cameraReady && !audioEnabled && (
+                <div className="px-4 py-3 rounded-lg font-mono text-xs"
+                  style={{ background: '#f59e0b10', border: '1px solid #f59e0b30', color: '#f59e0b' }}>
+                  ⚠ No microphone detected. Whisper speech fallback will be unavailable.
+                  Grant microphone permission for best results.
+                </div>
+              )}
 
               <div className="flex gap-3 flex-wrap">
                 {!cameraReady && !recordedBlob && (

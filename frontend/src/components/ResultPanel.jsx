@@ -54,7 +54,6 @@ function VisualizationGallery({ vizPaths, API }) {
 }
 
 export default function ResultPanel({ result, sourceMedia, onReset, API = 'http://localhost:8000' }) {
-  const isLipReading  = result.source === 'lip_reading'
   const confidencePct = Math.round((result.confidence || 0) * 100)
   const confColor     = getConfidenceColor(confidencePct)
   const sentence      = result.sentence || result.predicted_sentence || '—'
@@ -89,8 +88,6 @@ export default function ResultPanel({ result, sourceMedia, onReset, API = 'http:
           <span className="font-mono text-xs" style={{ color: '#6b7280' }}>ANALYSIS COMPLETE</span>
         </div>
 
-        {/* SourceVideoPlayer intentionally removed */}
-
         {/* Main result card */}
         <div className="mb-6 animate-slide-up rounded-lg overflow-hidden"
           style={{
@@ -103,21 +100,6 @@ export default function ResultPanel({ result, sourceMedia, onReset, API = 'http:
             style={{ background: 'linear-gradient(90deg, transparent, #3b82f6, transparent)' }} />
 
           <div className="p-6 sm:p-8">
-
-            {/* Source badge */}
-            <div className="flex flex-wrap items-center gap-3 mb-6">
-              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg font-mono text-xs ${
-                isLipReading ? 'badge-lip' : 'badge-speech'}`}>
-                <div className="w-1.5 h-1.5 rounded-full"
-                  style={{ background: isLipReading ? '#3b82f6' : '#f59e0b' }} />
-                {isLipReading ? 'LIP READING' : 'SPEECH FALLBACK'}
-              </div>
-              <span className="font-mono text-xs" style={{ color: '#6b7280' }}>
-                {isLipReading
-                  ? 'High confidence — primary model used'
-                  : 'Low confidence — Whisper fallback activated'}
-              </span>
-            </div>
 
             {/* Prediction */}
             <div className="mb-8">
@@ -140,9 +122,6 @@ export default function ResultPanel({ result, sourceMedia, onReset, API = 'http:
                 <div className="flex items-end gap-2 mb-3">
                   <span className="text-3xl font-black font-mono" style={{ color: confColor }}>
                     {confidencePct}%
-                  </span>
-                  <span className="font-mono text-xs mb-1" style={{ color: '#6b7280' }}>
-                    {confidencePct >= 70 ? 'above threshold' : 'below threshold'}
                   </span>
                 </div>
                 <div className="confidence-bar-track h-2">
