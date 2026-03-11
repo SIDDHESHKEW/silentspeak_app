@@ -117,6 +117,7 @@ winget install ffmpeg
 Then **restart your terminal** and verify:
 ```powershell
 ffmpeg -version
+
 ```
 
 **Option B — manual:**

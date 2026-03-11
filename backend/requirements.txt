@@ -1,129 +1,37 @@
 # ============================================================
-# SilentSpeak Backend — requirements.txt
+# SilentSpeak Backend - Python Dependencies
 # ============================================================
-# Verified environment:
-#   OS: Windows 10 / Windows 11
-#   Python: 3.11.9 (64-bit)
+# Confirmed working on Windows 10/11, Python 3.11
+
+# IMPORTANT INSTALL ORDER
+# STEP 1:
+# pip install torch==2.2.2+cpu torchaudio==2.2.2+cpu --index-url https://download.pytorch.org/whl/cpu
 #
-# ============================================================
-# ⚠️  INSTALLATION ORDER IS CRITICAL
-# ============================================================
-#
-# STEP 1 — Install PyTorch FIRST (NOT from PyPI)
-#
-#   pip install torch==2.2.2+cpu torchaudio==2.2.2+cpu ^
-#       --index-url https://download.pytorch.org/whl/cpu
-#
-# STEP 2 — Install the rest of the dependencies
-#
-#   pip install -r requirements.txt
-#
-# Reason:
-# On Windows, TensorFlow + PyTorch installations can conflict
-# if installed in the wrong order.
-#
+# STEP 2:
+# pip install -r requirements.txt
 # ============================================================
 
 
-
-# ============================================================
 # Web Framework
-# ============================================================
-
 fastapi==0.111.0
 uvicorn[standard]==0.29.0
 python-multipart==0.0.9
 pydantic==2.7.1
 
 
-
-# ============================================================
 # Deep Learning
-# ============================================================
-#
-# TensorFlow 2.18.0 is the LAST version with Windows wheels.
-# Versions 2.19+ dropped Windows support.
-#
-# This version includes Keras 3.x which is required to load:
-#     silentspeak_demo.keras
-#
-# ⚠️ DO NOT UPGRADE
-#
-
 tensorflow==2.18.0
 
 
-
-# ============================================================
-# Numeric Computing
-# ============================================================
-#
-# numpy must stay pinned to 2.0.2
-# numpy 2.1+ breaks OpenCV on Windows.
-#
-
-numpy==2.0.2
-
-
-
-# ============================================================
 # Computer Vision
-# ============================================================
-#
-# Headless version avoids GUI dependencies on servers.
-#
-
+numpy==2.0.2
 opencv-python-headless==4.10.0.84
 
 
-
-# ============================================================
-# Speech Recognition Fallback
-# ============================================================
-#
-# Whisper runs locally on CPU.
-# First run downloads ~140 MB model weights automatically.
-#
-# No API key required.
-#
-
+# Speech Fallback
 openai-whisper
 ffmpeg-python
 
 
-
-# ============================================================
 # Windows Stability Fix
-# ============================================================
-#
-# ⚠️ CRITICAL PIN
-#
-# optree 0.13.x causes fatal Windows crashes when used with
-# TensorFlow 2.18.
-#
-# This exact version must be used.
-#
-
 optree==0.12.1
-
-
-
-# ============================================================
-# PyTorch (Installed Separately)
-# ============================================================
-#
-# DO NOT include these in the pip install -r command.
-#
-# Install manually FIRST:
-#
-# pip install torch==2.2.2+cpu torchaudio==2.2.2+cpu ^
-#     --index-url https://download.pytorch.org/whl/cpu
-#
-# Why pinned to 2.2.2:
-#
-#   torch 2.1.x → numpy 2.x DLL crash on Windows
-#   torch 2.3.x → requires CUDA or Python 3.12 wheels
-#
-# 2.2.2+cpu is the most stable CPU build for Python 3.11.
-#
-# ============================================================

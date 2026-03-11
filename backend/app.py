@@ -117,6 +117,8 @@ app.mount(
     name="viz",
 )
 
+app.mount("/assets", StaticFiles(directory="assets"), name="assets")
+
 
 # ============================================================
 # REQUEST / RESPONSE MODELS
