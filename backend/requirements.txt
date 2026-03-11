@@ -1,0 +1,19 @@
+# SilentSpeak Backend — Python dependencies
+# Install with: pip install -r requirements.txt
+
+# Web framework
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+python-multipart==0.0.9
+
+# AI / ML
+tensorflow==2.19.0
+numpy==2.0.2
+opencv-python-headless==4.13.0.90
+openai-whisper
+
+# Audio extraction
+ffmpeg-python
+
+# Data validation (FastAPI uses this internally)
+pydantic==2.7.1
