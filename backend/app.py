@@ -13,6 +13,8 @@
 # ============================================================
 
 import os
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 import logging
 from contextlib import asynccontextmanager
 from typing import List, Optional
