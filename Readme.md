@@ -252,7 +252,7 @@ npm run dev
     { "label": "f_four_now", "probability": 0.0512 },
     { "label": "s_two_now",  "probability": 0.0198 }
   ],
-  "viz_paths":  ["/viz/frame_0_original.jpg", "..."],
+  "viz_paths":  ["/viz/frame_0_original.jpg", ".."],
   "video_path": "assets/demo_videos/lgwg2n.mpg"
 }
 ```
