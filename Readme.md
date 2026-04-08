@@ -131,6 +131,7 @@ bin blue at {letter} {digit} {adverb}
 | ffmpeg | System binary |
 
 > ⚠️ Python 3.12 is NOT supported — TensorFlow 2.18 has no 3.12 wheel.
+> Follow every detail properly to setup project.
 
 ---
 
